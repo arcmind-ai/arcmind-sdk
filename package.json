@@ -37,7 +37,18 @@
   "keywords": [
     "analytics",
     "sdk",
-    "arcmind"
+    "arcmind",
+    "tracking",
+    "events"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "author": "Arcmind <team@arcmind.ai> (https://arcmind.ai)",
+  "homepage": "https://arcmind.ai",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/arcmind-ai/arcmind-sdk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/arcmind-ai/arcmind-sdk/issues"
+  }
 }
