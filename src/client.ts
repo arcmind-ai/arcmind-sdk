@@ -17,12 +17,23 @@ export interface ArcmindConfig {
 }
 
 export class Arcmind {
+  private static readonly UTM_KEYS = [
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+  ] as const;
+
+  private static readonly UTM_STORAGE_KEY = "arcmind_utm";
+
   private token: string;
   private sessionId: string;
   private userId?: string;
   private batch: BatchManager;
   private unregisterFlush: (() => void) | null = null;
   private destroyed = false;
+  private utmParams: Record<string, string> = {};
 
   constructor(config: ArcmindConfig) {
     if (!config.token || typeof config.token !== "string") {
@@ -31,6 +42,7 @@ export class Arcmind {
 
     this.token = config.token;
     this.sessionId = this.generateId();
+    this.utmParams = this.captureUtm();
 
     this.batch = new BatchManager((events) => this.sendBatch(events), {
       maxSize: config.batchSize ?? 20,
@@ -47,6 +59,10 @@ export class Arcmind {
     return this.batch.pending;
   }
 
+  getUtm(): Readonly<Record<string, string>> {
+    return { ...this.utmParams };
+  }
+
   track(name: string, properties?: Record<string, unknown>): void {
     if (this.destroyed) return;
     const validated = this.validateString(
@@ -55,10 +71,13 @@ export class Arcmind {
     );
     if (validated === null) return;
 
+    const sanitized = this.sanitizePayload(properties, "properties");
+    const merged = this.mergeUtm(sanitized);
+
     this.batch.push({
       type: "track",
       name: validated,
-      properties: this.sanitizePayload(properties, "properties"),
+      properties: merged,
       timestamp: Date.now(),
       sessionId: this.sessionId,
       userId: this.userId,
@@ -205,6 +224,54 @@ export class Arcmind {
       console.warn(`[arcmind] ${label} is not serializable, dropping.`);
       return undefined;
     }
+  }
+
+  private captureUtm(): Record<string, string> {
+    const isBrowser =
+      typeof window !== "undefined" &&
+      typeof window.location !== "undefined";
+    if (!isBrowser) return {};
+
+    const params = new URLSearchParams(window.location.search);
+    const fromUrl: Record<string, string> = {};
+
+    for (const key of Arcmind.UTM_KEYS) {
+      const value = params.get(key);
+      if (value) fromUrl[key] = value;
+    }
+
+    if (Object.keys(fromUrl).length > 0) {
+      this.persistUtm(fromUrl);
+      return fromUrl;
+    }
+
+    return this.loadPersistedUtm();
+  }
+
+  private persistUtm(utm: Record<string, string>): void {
+    try {
+      localStorage.setItem(Arcmind.UTM_STORAGE_KEY, JSON.stringify(utm));
+    } catch {
+      // localStorage unavailable (private browsing, SSR, etc.)
+    }
+  }
+
+  private loadPersistedUtm(): Record<string, string> {
+    try {
+      const stored = localStorage.getItem(Arcmind.UTM_STORAGE_KEY);
+      if (stored) return JSON.parse(stored) as Record<string, string>;
+    } catch {
+      // localStorage unavailable or corrupted
+    }
+    return {};
+  }
+
+  private mergeUtm(
+    properties: Record<string, unknown> | undefined
+  ): Record<string, unknown> | undefined {
+    const hasUtm = Object.keys(this.utmParams).length > 0;
+    if (!hasUtm) return properties;
+    return { ...this.utmParams, ...properties };
   }
 
   private generateId(): string {

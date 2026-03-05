@@ -447,3 +447,139 @@ describe("Arcmind", () => {
     client.destroy();
   });
 });
+
+// ── UTM capture ──────────────────────────────────────────────────────────────
+
+describe("UTM capture", () => {
+  const originalLocation = window.location;
+
+  function setSearch(search: string) {
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...originalLocation, search },
+    });
+  }
+
+  beforeEach(() => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 })
+    );
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: originalLocation,
+    });
+    localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  it("extracts UTM params from the URL", () => {
+    setSearch("?utm_source=google&utm_medium=cpc&utm_campaign=spring");
+    const client = new Arcmind({ token: "test-token" });
+    expect(client.getUtm()).toEqual({
+      utm_source: "google",
+      utm_medium: "cpc",
+      utm_campaign: "spring",
+    });
+    client.destroy();
+  });
+
+  it("ignores non-UTM query params", () => {
+    setSearch("?ref=abc&utm_source=twitter&foo=bar");
+    const client = new Arcmind({ token: "test-token" });
+    expect(client.getUtm()).toEqual({ utm_source: "twitter" });
+    client.destroy();
+  });
+
+  it("returns empty when no UTM params and no localStorage", () => {
+    setSearch("");
+    const client = new Arcmind({ token: "test-token" });
+    expect(client.getUtm()).toEqual({});
+    client.destroy();
+  });
+
+  it("persists UTM params to localStorage", () => {
+    setSearch("?utm_source=newsletter&utm_content=cta");
+    const client = new Arcmind({ token: "test-token" });
+    client.destroy();
+
+    const stored = JSON.parse(localStorage.getItem("arcmind_utm")!);
+    expect(stored).toEqual({
+      utm_source: "newsletter",
+      utm_content: "cta",
+    });
+  });
+
+  it("loads persisted UTMs when URL has none", () => {
+    localStorage.setItem(
+      "arcmind_utm",
+      JSON.stringify({ utm_source: "email", utm_campaign: "onboarding" })
+    );
+    setSearch("");
+    const client = new Arcmind({ token: "test-token" });
+    expect(client.getUtm()).toEqual({
+      utm_source: "email",
+      utm_campaign: "onboarding",
+    });
+    client.destroy();
+  });
+
+  it("overwrites persisted UTMs when URL has new ones (last-touch)", () => {
+    localStorage.setItem(
+      "arcmind_utm",
+      JSON.stringify({ utm_source: "old" })
+    );
+    setSearch("?utm_source=new&utm_medium=social");
+    const client = new Arcmind({ token: "test-token" });
+    expect(client.getUtm()).toEqual({
+      utm_source: "new",
+      utm_medium: "social",
+    });
+    const stored = JSON.parse(localStorage.getItem("arcmind_utm")!);
+    expect(stored).toEqual({ utm_source: "new", utm_medium: "social" });
+    client.destroy();
+  });
+
+  it("merges UTM params into track() event properties", () => {
+    setSearch("?utm_source=google&utm_medium=cpc");
+    const client = new Arcmind({ token: "test-token" });
+    client.track("page_view", { path: "/pricing" });
+    const drained = client["batch"].drain();
+    expect(drained[0].properties).toEqual({
+      utm_source: "google",
+      utm_medium: "cpc",
+      path: "/pricing",
+    });
+    client.destroy();
+  });
+
+  it("user properties take precedence over UTM params", () => {
+    setSearch("?utm_source=google");
+    const client = new Arcmind({ token: "test-token" });
+    client.track("test", { utm_source: "override" });
+    const drained = client["batch"].drain();
+    expect(drained[0].properties).toEqual({ utm_source: "override" });
+    client.destroy();
+  });
+
+  it("track() works normally when no UTMs are present", () => {
+    setSearch("");
+    const client = new Arcmind({ token: "test-token" });
+    client.track("click", { button: "signup" });
+    const drained = client["batch"].drain();
+    expect(drained[0].properties).toEqual({ button: "signup" });
+    client.destroy();
+  });
+
+  it("track() with no properties returns UTMs as properties", () => {
+    setSearch("?utm_source=reddit");
+    const client = new Arcmind({ token: "test-token" });
+    client.track("page_view");
+    const drained = client["batch"].drain();
+    expect(drained[0].properties).toEqual({ utm_source: "reddit" });
+    client.destroy();
+  });
+});
